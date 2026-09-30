@@ -4,6 +4,7 @@
 #include "file_transfer/storage/filename_generator.hpp"
 #include "file_transfer/storage/i_file_store.hpp"
 #include "file_transfer/protocol/protocol.hpp"
+#include "file_transfer/protocol/frame_parser.hpp"
 #include "file_transfer/transport/tcp_transport.hpp"
 #include "file_transfer/transfer/transfer.hpp"
 #include "file_transfer/transport/transport.hpp"
@@ -274,6 +275,44 @@ void test_tcp_receive_timeout_configuration() {
     ::close(sockets[1]);
 }
 
+void test_frame_parser_partial_input() {
+    using namespace file_transfer::protocol;
+    PartialMemoryTransport transport;
+    const std::array<std::byte, 3> first{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}};
+    write_message(transport, MessageType::data, encode_data(0U, file_transfer::crc32(first), first));
+    const auto& bytes = transport.bytes();
+    FrameParser parser;
+    for (std::size_t index = 0; index < bytes.size(); ++index) {
+        parser.feed(std::span<const std::byte>(bytes.data() + index, 1U));
+    }
+    check(parser.has_message(), "frame parser did not emit byte-split frame");
+    const Message message = parser.pop_message();
+    check(message.type == MessageType::data && decode_data(message.payload).bytes.size() == first.size(),
+          "frame parser decoded byte-split payload incorrectly");
+
+    PartialMemoryTransport two_frames;
+    write_message(two_frames, MessageType::hello, encode_hello({0U, 0U, maximum_chunk_size}));
+    write_message(two_frames, MessageType::finish, encode_finish({0U, 0U, 0U}));
+    FrameParser multiple;
+    multiple.feed(two_frames.bytes());
+    check(multiple.has_message(), "frame parser did not emit first coalesced frame");
+    (void)multiple.pop_message();
+    check(multiple.has_message(), "frame parser did not emit second coalesced frame");
+    (void)multiple.pop_message();
+
+    FrameParser truncated;
+    truncated.feed(std::span<const std::byte>(bytes.data(), 5U));
+    bool eof_failed = false;
+    try { truncated.finish(); } catch (const std::runtime_error&) { eof_failed = true; }
+    check(eof_failed, "frame parser accepted EOF in a partial header");
+
+    std::array<std::byte, frame_header_size> invalid = {};
+    invalid[0] = std::byte{0};
+    bool invalid_failed = false;
+    try { FrameParser bad; bad.feed(invalid); } catch (const std::runtime_error&) { invalid_failed = true; }
+    check(invalid_failed, "frame parser accepted invalid magic");
+}
+
 void test_cli_parsing() {
     using namespace file_transfer;
     const std::array<std::string_view, 2> server_args{"-s", "--port"};
@@ -306,7 +345,21 @@ void test_cli_parsing() {
         "-c", "sample.bin", "--host", "localhost", "--port", "65535"};
     const auto client = std::get<ClientOptions>(parse_cli(full_client));
     check(client.host == "localhost" && client.port == 65535U &&
-          client.file == std::filesystem::path("sample.bin"), "CLI client options");
+          client.file == std::filesystem::path("sample.bin") && client.files.size() == 1U,
+          "CLI client options");
+    const std::array<std::string_view, 8> multi_client{
+        "-c", "one.bin", "two.bin", "--max-active", "2", "--host", "localhost", "--port"};
+    bool rejected_missing_multi_port = false;
+    try { (void)parse_cli(multi_client); } catch (const std::invalid_argument&) { rejected_missing_multi_port = true; }
+    check(rejected_missing_multi_port, "CLI validates multi-file options");
+    const std::array<std::string_view, 6> multi_files{"-c", "one.bin", "two.bin", "--max-active", "2", "--"};
+    const auto parsed_multi = std::get<ClientOptions>(parse_cli(multi_files));
+    check(parsed_multi.files.size() == 2U && parsed_multi.max_active == 2U, "CLI multi-file scheduling options");
+        const std::array<std::string_view, 4> explicit_files{"-c", "--", "file1", "--weird-name.bin"};
+        const auto parsed_explicit = std::get<ClientOptions>(parse_cli(explicit_files));
+        check(parsed_explicit.files.size() == 2U &&
+            parsed_explicit.files[1] == std::filesystem::path("--weird-name.bin"),
+            "CLI -- preserves option-looking file names");
         const std::array<std::string_view, 2> default_client_args{"-c", "sample.bin"};
         const auto default_client = std::get<ClientOptions>(parse_cli(default_client_args));
         check(default_client.host == "127.0.0.1" && default_client.port == 5000U,
@@ -465,6 +518,7 @@ int main() {
         run("protocol round trip and endian", test_protocol_round_trip_and_endian);
         run("partial I/O and EOF", test_partial_io_and_eof);
         run("TCP receive timeout", test_tcp_receive_timeout_configuration);
+        run("incremental frame parser", test_frame_parser_partial_input);
         run("CLI parsing", test_cli_parsing);
         run("filename generation", test_filename_generation);
         run("storage write failure", test_storage_write_failure);

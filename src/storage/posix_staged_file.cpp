@@ -3,7 +3,9 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#if defined(__linux__)
 #include <linux/fs.h>
+#endif
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -11,7 +13,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <syncstream>
 #include <system_error>
 #include <utility>
 
@@ -37,10 +38,10 @@ PosixStagedFile::~PosixStagedFile() {
     try {
         discard();
     } catch (const std::exception& error) {
-        std::osyncstream(std::cerr) << "[STORAGE] Staging cleanup failed: " << error.what() << '\n';
+        std::cerr << "[STORAGE] Staging cleanup failed: " << error.what() << '\n';
         close_descriptors();
     } catch (...) {
-        std::osyncstream(std::cerr) << "[STORAGE] Staging cleanup failed: unknown error\n";
+        std::cerr << "[STORAGE] Staging cleanup failed: unknown error\n";
         close_descriptors();
     }
 }
@@ -101,11 +102,11 @@ std::filesystem::path PosixStagedFile::commit() {
             try {
                 discard();
             } catch (const std::exception& error) {
-                std::osyncstream(std::cerr) << "[STORAGE] File published at " << destination
-                                            << "; staging cleanup failed: " << error.what() << '\n';
+                std::cerr << "[STORAGE] File published at " << destination
+                          << "; staging cleanup failed: " << error.what() << '\n';
             } catch (...) {
-                std::osyncstream(std::cerr) << "[STORAGE] File published at " << destination
-                                            << "; staging cleanup failed: unknown error\n";
+                std::cerr << "[STORAGE] File published at " << destination
+                          << "; staging cleanup failed: unknown error\n";
             }
             return destination;
         }

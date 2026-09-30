@@ -14,6 +14,9 @@ public:
     TcpListener& operator=(const TcpListener&) = delete;
 
     std::optional<AcceptedConnection> accept() override;
+    std::optional<AcceptedConnection> accept_nonblocking();
+    [[nodiscard]] int fd() const noexcept;
+    [[nodiscard]] int wake_fd() const noexcept;
     void cancel() noexcept override;
     void notify() noexcept override;
     [[nodiscard]] std::string local_endpoint() const override;

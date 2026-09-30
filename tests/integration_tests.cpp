@@ -23,6 +23,8 @@
 #include <thread>
 #include <vector>
 
+#include "file_transfer/protocol/protocol.hpp"
+
 namespace {
 
 using namespace std::chrono_literals;
@@ -161,10 +163,12 @@ void wait_until(Predicate predicate, std::chrono::milliseconds timeout, const st
 
 class Server final {
 public:
-    Server(const std::filesystem::path& executable, const std::filesystem::path& root)
+    Server(const std::filesystem::path& executable, const std::filesystem::path& root,
+           std::uint64_t idle_timeout_ms = 30000U)
         : executable_(executable), log_(root / "server.log"), cwd_(root / "foreign-cwd") {
         std::filesystem::create_directories(cwd_);
-        process_ = spawn(executable_, {"-s", "--port", "0"}, log_, cwd_);
+        process_ = spawn(executable_, {"-s", "--port", "0", "--idle-timeout-ms",
+                                      std::to_string(idle_timeout_ms)}, log_, cwd_);
         try {
             wait_until([this] { return read_text(log_).find("[SERVER] Listening on ") != std::string::npos; },
                        10s, "server startup");
@@ -206,6 +210,16 @@ public:
 
     pid_t start_client(const std::filesystem::path& file, const std::filesystem::path& log) const {
         return spawn(executable_, {"-c", file.string(), "--host", "127.0.0.1", "--port", port_}, log);
+    }
+
+    pid_t start_multi_client(const std::vector<std::filesystem::path>& files,
+                             const std::filesystem::path& log,
+                             std::size_t max_active = 8U) const {
+        std::vector<std::string> arguments{"-c"};
+        for (const auto& file : files) arguments.push_back(file.string());
+        arguments.insert(arguments.end(), {"--host", "127.0.0.1", "--port", port_,
+                                           "--max-active", std::to_string(max_active)});
+        return spawn(executable_, arguments, log);
     }
 
     void stop(int signal_number = SIGTERM) noexcept {
@@ -469,39 +483,30 @@ void test_interrupted_client_and_recovery(const Server& server,
           "staging directory remained after recovery transfer");
 }
 
-void test_worker_limit_and_recovery(const Server& server,
-                                    const std::filesystem::path& root,
-                                    const std::filesystem::path& output_directory) {
-    const std::string rejected_marker = "[SERVER] Client rejected: active connection limit reached";
-    const std::string joined_marker = "[SERVER] Worker joined:";
-    constexpr std::size_t successful_transfers_before = 12U;
-    wait_until([&] {
-        return occurrences(read_text(server.log()), joined_marker) == successful_transfers_before;
-    }, 10s, "reap of the 12 previous completed transfers");
-    const std::size_t rejected_before = occurrences(read_text(server.log()), rejected_marker);
-    const std::size_t joined_before = occurrences(read_text(server.log()), joined_marker);
+void test_connection_burst_and_recovery(const Server& server,
+                                        const std::filesystem::path& root,
+                                        const std::filesystem::path& output_directory) {
+    const std::string connection_marker = "[SERVER] Client connected:";
+    const std::size_t connected_before = occurrences(read_text(server.log()), connection_marker);
     std::vector<int> clients;
-    for (int index = 0; index < 34; ++index) {
+    for (int index = 0; index < 128; ++index) {
         clients.push_back(server.connect_idle_client());
     }
     wait_until([&] {
-        return occurrences(read_text(server.log()), rejected_marker) == rejected_before + 2U;
-    }, 10s, "active-client limit");
+        return occurrences(read_text(server.log()), connection_marker) >= connected_before + clients.size();
+    }, 15s, "128 client connections");
     for (const int descriptor : clients) {
         ::close(descriptor);
     }
-    wait_until([&] {
-        return occurrences(read_text(server.log()), joined_marker) == joined_before + 32U;
-    }, 10s, "worker cleanup after idle client close");
 
-    const auto recovery = root / "inputs" / "after-limit.bin";
+    const auto recovery = root / "inputs" / "after-burst.bin";
     write_pattern_file(recovery, 2049U, 0x32U);
     const std::vector<std::filesystem::path> previous_files = final_files(output_directory);
     const pid_t client = server.start_client(recovery, root / "limit-recovery-client.log");
-    wait_for_success(client, 10s, "client after worker limit");
+    wait_for_success(client, 10s, "client after connection burst");
     const auto published_files = final_files(output_directory);
     check(published_files.size() == previous_files.size() + 1U,
-          "worker-limit recovery did not publish exactly one file");
+          "connection-burst recovery did not publish exactly one file");
     bool bytes_match = false;
     for (const auto& published : published_files) {
         if (files_equal(recovery, published)) {
@@ -509,7 +514,96 @@ void test_worker_limit_and_recovery(const Server& server,
             break;
         }
     }
-    check(bytes_match, "worker-limit recovery file bytes differ");
+    check(bytes_match, "connection-burst recovery file bytes differ");
+}
+
+void test_multi_file_client(const Server& server, const std::filesystem::path& root,
+                            const std::filesystem::path& output_directory) {
+    const auto directory = root / "multi-inputs";
+    std::filesystem::create_directories(directory);
+    std::vector<std::filesystem::path> inputs;
+    for (std::size_t index = 0; index < 105U; ++index) {
+        const auto path = directory / ("queued-" + std::to_string(index) + ".bin");
+        write_pattern_file(path, 97U + index, static_cast<std::uint32_t>(index + 500U));
+        inputs.push_back(path);
+    }
+    const std::size_t before = final_files(output_directory).size();
+    const pid_t client = server.start_multi_client(inputs, root / "multi-client.log", 7U);
+    wait_for_success(client, 30s, "multi-file client");
+    check(final_files(output_directory).size() == before + inputs.size(),
+          "multi-file client did not publish every queued file");
+    for (const auto& input : inputs) {
+        bool matched = false;
+        for (const auto& output : final_files(output_directory)) {
+            if (files_equal(input, output)) { matched = true; break; }
+        }
+        check(matched, "multi-file client published mismatched bytes");
+    }
+
+    const auto valid_one = directory / "valid-one.bin";
+    const auto valid_two = directory / "valid-two.bin";
+    const auto invalid = directory / "invalid-directory";
+    write_pattern_file(valid_one, 123U, 900U);
+    write_pattern_file(valid_two, 456U, 901U);
+    std::filesystem::create_directory(invalid);
+    const pid_t mixed_client = server.start_multi_client({valid_one, invalid, valid_two},
+                                                          root / "mixed-client.log", 2U);
+    wait_for_failure(mixed_client, 15s, "multi-file client with one invalid input");
+    check(final_files(output_directory).size() == before + inputs.size() + 2U,
+          "one invalid multi-file input cancelled valid transfers");
+    check(staged_files(output_directory) == 0U && staging_directories(output_directory) == 0U,
+          "multi-file failure left staging state behind");
+}
+
+void append_u16(std::vector<std::byte>& bytes, std::uint16_t value) {
+    bytes.push_back(static_cast<std::byte>((value >> 8U) & 0xFFU));
+    bytes.push_back(static_cast<std::byte>(value & 0xFFU));
+}
+
+void append_u32(std::vector<std::byte>& bytes, std::uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        bytes.push_back(static_cast<std::byte>((value >> static_cast<unsigned>(shift)) & 0xFFU));
+    }
+}
+
+void test_timeout_lane(const std::filesystem::path& original_executable) {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path();
+    const auto executable_directory = root / "bin";
+    std::filesystem::create_directories(executable_directory);
+    const auto executable = executable_directory / "file_transfer";
+    std::filesystem::copy_file(original_executable, executable,
+                               std::filesystem::copy_options::overwrite_existing);
+    Server server(executable, root, 100U);
+    const int stalled = server.connect_idle_client();
+
+    std::vector<std::byte> hello;
+    append_u32(hello, 0x4654524EU);
+    append_u16(hello, file_transfer::protocol::version);
+    append_u16(hello, static_cast<std::uint16_t>(file_transfer::protocol::MessageType::hello));
+    append_u32(hello, 16U);
+    append_u32(hello, 4096U);
+    append_u32(hello, 0U);
+    append_u32(hello, file_transfer::protocol::maximum_chunk_size);
+    check(::send(stalled, hello.data(), hello.size(), 0) == static_cast<ssize_t>(hello.size()),
+          "could not send timeout test HELLO");
+    const std::array<std::byte, 1> partial_data{std::byte{0x46}};
+    check(::send(stalled, partial_data.data(), partial_data.size(), 0) == 1,
+          "could not send partial timeout frame");
+
+    wait_until([&] {
+        return read_text(server.log()).find("idle timeout") != std::string::npos &&
+               staged_files(executable_directory) == 0U && staging_directories(executable_directory) == 0U;
+    }, 5s, "idle timeout cleanup");
+    ::close(stalled);
+
+    const auto recovery = root / "recovery.bin";
+    write_pattern_file(recovery, 2049U, 0xA17U);
+    const pid_t client = server.start_client(recovery, root / "recovery.log");
+    wait_for_success(client, 10s, "transfer after timeout");
+    check(final_files(executable_directory).size() == 1U &&
+          files_equal(recovery, final_files(executable_directory).front()),
+          "timeout cleanup broke recovery transfer");
 }
 
 void run_integration(const std::filesystem::path& original_executable) {
@@ -537,7 +631,7 @@ void run_integration(const std::filesystem::path& original_executable) {
                      5s, "Cyrillic client flag");
     std::vector<std::filesystem::path> inputs;
     test_transfers_and_concurrency(server, root, output_directory);
-    test_worker_limit_and_recovery(server, root, output_directory);
+    test_connection_burst_and_recovery(server, root, output_directory);
     const auto inputs_directory = root / "inputs";
     for (const auto& entry : std::filesystem::directory_iterator(inputs_directory)) {
         inputs.push_back(entry.path());
@@ -546,13 +640,13 @@ void run_integration(const std::filesystem::path& original_executable) {
     check(final_files(root).empty(), "received files were saved relative to server cwd");
     verify_received_files(output_directory, inputs);
     test_interrupted_client_and_recovery(server, root, output_directory, inputs);
+    test_multi_file_client(server, root, output_directory);
 
     const std::string log = read_text(server.log());
     check(log.find("[SERVER] Transfer failed:") != std::string::npos,
           "server did not report the interrupted transfer");
         const std::string connection_marker = "[SERVER] Client connected:";
         const std::size_t previous_connections = occurrences(log, connection_marker);
-        const std::size_t previous_failures = occurrences(log, "[SERVER] Transfer failed:");
         const int stalled_client = server.connect_idle_client();
         wait_until([&] {
           return occurrences(read_text(server.log()), connection_marker) > previous_connections;
@@ -562,8 +656,8 @@ void run_integration(const std::filesystem::path& original_executable) {
         const std::string stopped_log = read_text(server.log());
         check(stopped_log.find("[SERVER] Stopped") != std::string::npos,
           "server did not stop cleanly");
-        check(occurrences(stopped_log, "[SERVER] Transfer failed:") > previous_failures,
-            "server shutdown did not cancel its active worker");
+          check(staged_files(output_directory) == 0U && staging_directories(output_directory) == 0U,
+              "server shutdown left staging state behind");
 
             Server interrupt_server(executable, root / "interrupt-server");
             interrupt_server.send_signal(SIGUSR1);
@@ -576,7 +670,13 @@ void run_integration(const std::filesystem::path& original_executable) {
 
 int main(int argc, char** argv) {
     try {
-        check(argc == 2, "expected file_transfer executable path");
+        check(argc == 2 || argc == 3, "expected file_transfer executable path and optional lane");
+        if (argc == 3 && std::string_view(argv[2]) == "timeout") {
+            test_timeout_lane(argv[1]);
+            std::cout << "[PASS] timeout lane: partial frame timeout, cleanup, recovery\n";
+            return 0;
+        }
+        check(argc == 2, "unknown integration lane");
         run_integration(argv[1]);
         std::cout << "[PASS] process integration: payloads, concurrency, interruption, recovery, executable directory\n";
     } catch (const std::exception& error) {

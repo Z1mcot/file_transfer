@@ -13,7 +13,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <syncstream>
 #include <system_error>
 #include <utility>
 
@@ -109,8 +108,7 @@ std::unique_ptr<IStagedFile> FileStore::create_staged_file() {
                 const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
                 ::close(output_directory);
                 if (!cleanup_error.empty()) {
-                    std::osyncstream(std::cerr) << "[STORAGE] Setup cleanup failed: "
-                                                << cleanup_error << '\n';
+                    std::cerr << "[STORAGE] Setup cleanup failed: " << cleanup_error << '\n';
                 }
                 throw;
             }
@@ -125,8 +123,7 @@ std::unique_ptr<IStagedFile> FileStore::create_staged_file() {
         const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
         ::close(output_directory);
         if (!payload_cleanup_error.empty()) {
-            std::osyncstream(std::cerr) << "[STORAGE] Staging collision cleanup failed: "
-                                        << payload_cleanup_error << '\n';
+            std::cerr << "[STORAGE] Staging collision cleanup failed: " << payload_cleanup_error << '\n';
         }
         if (error != EEXIST) {
             errno = error;
@@ -136,8 +133,7 @@ std::unique_ptr<IStagedFile> FileStore::create_staged_file() {
                                         (cleanup_error.empty() ? std::string{} : "; " + cleanup_error));
         }
         if (!cleanup_error.empty()) {
-            std::osyncstream(std::cerr) << "[STORAGE] Staging collision cleanup failed: "
-                                        << cleanup_error << '\n';
+            std::cerr << "[STORAGE] Staging collision cleanup failed: " << cleanup_error << '\n';
         }
     }
     throw std::runtime_error("could not allocate a unique temporary filename");

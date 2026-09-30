@@ -13,10 +13,13 @@ public:
     ~SignalWaiter();
     SignalWaiter(const SignalWaiter&) = delete;
     SignalWaiter& operator=(const SignalWaiter&) = delete;
+    [[nodiscard]] int fd() const noexcept;
+    bool consume() noexcept;
 
 private:
     std::atomic<bool> finished_{false};
     std::thread thread_;
+    int signal_fd_ = -1;
 };
 
 } // namespace file_transfer::application

@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
         }
         if (const auto* server = std::get_if<file_transfer::ServerOptions>(&command)) {
             file_transfer::ServerApplication application(
-                server->port, file_transfer::application::executable_directory());
+                server->port, file_transfer::application::executable_directory(), server->idle_timeout_ms);
             application.run();
             return 0;
         }

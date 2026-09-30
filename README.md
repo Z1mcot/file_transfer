@@ -1,15 +1,42 @@
 # file_transfer
 
-`file_transfer` is a Linux command-line program that sends one file per client process to a continuously running server. Both modes are in the same C++20 executable. Transfers are streaming, checksummed, and published only after complete validation.
+`file_transfer` передаёт файлы по TCP. В проекте есть сервер и клиент, собранные в одном исполняемом файле на C++20.
 
-## Requirements
+Сервер обслуживает много независимых соединений в одном цикле событий. Клиент может отправлять несколько файлов одновременно, используя отдельное TCP-соединение для каждого файла.
 
-- Linux with `/proc/self/exe` and POSIX sockets
-- CMake 3.20 or newer
-- A C++20 compiler
-- No third-party libraries
+## Использование ИИ:
 
-## Build
+При разработке использовалось:
+- Github Copilot (ChatGPT 6 Astra) для генерации кода и создания тестов;
+- Perplexity для ресёрча деталей реализации передачи данных по сети;
+- Claude для анализа проекта на тему перехода от модели thread-per-connection к использованию EventLoop
+- ChatGPT для доработки промптов
+
+Использованные промпты лежат в [prompts](prompts)
+
+- [1_INITIAL_PROMPT.md](prompts/1_INITIAL_PROMPT.md) - промпт с описанием задачи, ограничений, примерной архитектурой, протокола передачи данных и ожидаемым поведением на edge кейсах
+- [2_BEFORE_REFACTOR_PROMPT.md](prompts/2_BEFORE_REFACTOR_PROMPT.md) - анализ проекта на возможность перейти от thread-per-connection, к альтернативным моделям многопоточки, для того чтобы выдерживать больше одновременных запросов
+- [3_ACTUAL_REFACTOR.md](prompts/3_ACTUAL_REFACTOR.md) - план перехода к epoll + EventLoop + per-connection state machine. За счёт этого отвязываем запросы от потоков, так как у нас в основном именно IO-bound задача
+
+## Возможности
+
+- передача одного или нескольких файлов;
+- проверка размера и CRC32 каждого блока и всего файла;
+- атомарная публикация только полностью проверенного файла;
+- обработка частично пришедших сообщений;
+- ограничение числа одновременных соединений клиента через `--max-active`;
+- тайм-аут бездействия сервера через `--idle-timeout-ms`;
+- корректное завершение по `SIGINT` и `SIGTERM`.
+
+## Требования
+
+- CMake 3.20 или новее;
+- компилятор с поддержкой C++20;
+- POSIX-система с TCP-сокетами.
+
+На Linux используется `epoll`. Для локальной сборки на macOS предусмотрен эквивалентный механизм `kqueue`.
+
+## Сборка
 
 ```bash
 cmake -S . -B build
@@ -17,64 +44,120 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-## Run
+## Запуск
 
-Start the long-running server:
+Запустить сервер на порту `5000`:
 
 ```bash
 ./build/file_transfer -s
 ```
 
-Send a file from another terminal:
+Отправить один файл:
 
 ```bash
 ./build/file_transfer -c ./example.bin
 ```
 
-The defaults are server bind `0.0.0.0:5000` and client destination `127.0.0.1:5000`. Override them with `--port PORT` and client `--host HOST`:
+Отправить несколько файлов через один клиентский процесс:
+
+```bash
+./build/file_transfer -c first.bin second.bin third.bin --max-active 2
+```
+
+Дополнительные параметры клиента:
+
+```bash
+--host HOST       # адрес сервера, по умолчанию 127.0.0.1
+--port PORT       # порт сервера, по умолчанию 5000
+--max-active N    # максимум одновременно активных файлов
+```
+
+Параметры сервера:
+
+```bash
+--port PORT           # порт прослушивания
+--idle-timeout-ms MS  # тайм-аут бездействия, по умолчанию около 30 секунд
+```
+
+Пример запуска на другом порту:
 
 ```bash
 ./build/file_transfer -s --port 5001
-./build/file_transfer -c ./example.bin --host 192.0.2.10 --port 5001
+./build/file_transfer -c ./example.bin --host 127.0.0.1 --port 5001
 ```
 
-The server accepts one connection at a time and gives each accepted connection its own worker thread, up to 32 simultaneous clients; additional connections are closed and logged. TCP reads use a 30-second inactivity timeout so stalled peers release worker capacity. While idle the accept loop blocks in `poll()` with no timeout, so it uses no busy loop or periodic polling. A wake pipe notifies it both when a worker finishes and when shutdown is requested. `--port 0` asks the OS for an ephemeral port and is useful for tests.
+Чтобы имя файла, начинающееся с дефиса, не было принято за параметр, используйте `--`:
 
-## Output files
+```bash
+./build/file_transfer -c -- --weird-name.bin
+```
 
-Received files are saved beside the server executable, independent of its working directory. Names use UTC with microseconds: `YYYYMMDD_HHMMSS_ffffff.hex`. `.hex` is only the required filename extension; payload bytes are not transformed.
+## Как устроена передача
 
-Each transfer first writes to `payload.part` inside a private mode-0700 staging directory beside the executable. The server verifies the staging directory owner and permissions, keeps its directory descriptors open, and publishes relative to those descriptors, so the final file is the same inode the server opened and validated. After declared size, block order, per-block CRC32, whole-file CRC32, and FINISH metadata all match, it fsyncs the file, atomically publishes without replacing an existing name, then fsyncs both affected directories before reporting success. Failed or disconnected transfers explicitly remove their staging file and directory; cleanup failures are reported rather than silently treated as successful cleanup.
+Каждый файл передаётся через отдельное TCP-соединение. Несколько файлов не объединяются в один поток и не мультиплексируются.
 
-If directory fsync fails after publication, the server attempts to remove the final name and reports failure. If rollback itself fails, or its directory fsync fails and the name could return after a crash, the remaining file is already fully size/CRC validated; the error names its path so it is not mistaken for a partial transfer.
+Сервер использует неблокирующие сокеты и цикл событий. Для каждого соединения хранится отдельное состояние: разбор сообщений, счётчики, CRC32, staging-файл и очередь исходящих данных. Один медленный клиент не блокирует остальные соединения.
 
-## Architecture
+На Linux цикл событий использует `epoll`, тайм-ауты обслуживаются через `timerfd`, а сигналы завершения принимаются через `signalfd`. Обработка одного события ограничена бюджетом чтения, чтобы крупная передача не занимала цикл событий надолго.
 
-`CLI -> application -> transfer -> protocol -> ITransport -> TcpTransport`; `ITransportListener` provides the server-side accept boundary, and `IFileStore`/`IStagedFile` isolate file publication. The protocol and transfer layer use no TCP API. A future transport can implement the byte-stream interface without changing file transfer logic.
+Подробное описание владения объектами, состояний соединения и планирования файлов приведено в [docs/CONCURRENCY.md](docs/CONCURRENCY.md).
 
-Source files are grouped by responsibility: `src/cli/` parses arguments; `src/application/` contains the server/client applications and worker/signal lifecycle; `src/transfer/` implements streaming; `src/protocol/` serializes frames; `src/transport/` contains the transport adapters; `src/storage/` owns staging and output naming; and `src/checksum/` implements CRC32. Public class declarations have one class per header; concrete classes have separate translation units where they own behavior.
+## Протокол
 
-CRC32 is implemented locally using the standard reflected IEEE polynomial. The client makes two streaming passes over a regular input file: the first computes size and whole-file CRC32, and the second sends fixed 64 KiB chunks with their individual CRC32 values. Memory use remains bounded regardless of file size.
+Протокол использует фиксированный двоичный формат. Структуры C++ не отправляются напрямую: поля явно кодируются в сетевом порядке байт. Каждое сообщение состоит из заголовка и данных, поэтому сообщение может быть разбито на несколько операций чтения.
 
-## Protocol
+Передача проходит так:
 
-The wire format is versioned and uses explicit network-byte-order fields; no C++ structure is sent directly. Frames contain magic, version, message type, payload length, and a type-specific payload. DATA messages carry a zero-based sequence number, payload size, block CRC32, and bytes. FINISH repeats total bytes, chunks, and whole-file CRC32. The server returns RESULT success or an error. Full field sizes and validation rules are in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+1. `HELLO` сообщает размер файла, общий CRC32 и размер блока.
+2. `DATA` передаёт блок, его номер, размер и CRC32.
+3. `FINISH` подтверждает общий размер, число блоков и CRC32 файла.
+4. `RESULT` сообщает об успехе или ошибке.
 
-## Failure and shutdown behavior
+Сервер публикует файл только после проверки всех блоков и итоговых значений. Полное описание формата находится в [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
-The server detects EOF, malformed frames, sequence/size mismatches, CRC errors, and storage failures. A failed connection is isolated to its worker; the server keeps accepting clients. SIGINT and SIGTERM stop accepting, cancel active socket I/O, join workers, and preserve files already published. SIGPIPE is ignored and TCP writes also use `MSG_NOSIGNAL`.
+## Сохранение файлов
 
-The ASCII `-c` flag is required. A visually similar flag containing Cyrillic `с` is rejected with an explicit diagnostic. Invalid arguments and transfer errors return a nonzero exit status.
+Сервер сохраняет принятые файлы рядом со своим исполняемым файлом. Имя генерируется автоматически в формате:
 
-## Tests
+```text
+YYYYMMDD_HHMMSS_ffffff.hex
+```
 
-The dependency-free unit runner checks CRC32 vectors and incremental updates, endian encoding and protocol round trips, partial reads/writes, EOF, CLI validation, generated names, and injected storage errors. The process integration suite starts a real server and clients in a temporary directory and checks empty, one-byte, binary, 32 MiB, and eight concurrent transfers byte-for-byte. It also kills a client during a 512 MiB sparse-file transfer, verifies `.part` cleanup and absence of `.hex`, verifies recovery with the next client, and checks that server output follows the executable directory rather than the working directory.
+Расширение `.hex` является частью имени. Содержимое файла не преобразуется.
 
-Run just one lane with `ctest --test-dir build --output-on-failure -R unit` or `-R integration`.
+Сначала данные записываются во временный файл внутри отдельного staging-каталога. После проверки сервер делает `fsync`, атомарно публикует файл и синхронизирует каталоги. При ошибке временный файл и каталог удаляются.
 
-## Limitations
+## Ошибки и завершение
 
-- TCP is unauthenticated and unencrypted; use only on a trusted network or add a protected transport before exposing it to untrusted clients.
-- Interrupted transfers are discarded; resume is not supported.
-- Each simultaneous connection consumes one thread.
-- No sender-provided filename is stored; server-generated names avoid path traversal and collisions.
+Ошибка одного соединения не останавливает сервер и не отменяет другие передачи. При обрыве, неверном сообщении, ошибке CRC или сбое записи текущая передача отменяется, а staging-файлы удаляются.
+
+При `SIGINT` или `SIGTERM` сервер перестаёт принимать новые соединения, закрывает активные передачи и завершает цикл событий. `SIGPIPE` обработан безопасно.
+
+## Тесты
+
+В проекте есть три CTest-набора:
+
+```bash
+ctest --test-dir build --output-on-failure -R unit
+ctest --test-dir build --output-on-failure -R integration
+ctest --test-dir build --output-on-failure -R timeout
+```
+
+`unit` проверяет CRC32, кодирование протокола, разбор частичных сообщений, CLI и storage-ошибки.
+
+`integration` проверяет обычные и параллельные передачи, 128 соединений, восстановление после обрыва и отправку более 100 файлов через один клиентский процесс.
+
+`timeout` отправляет неполное сообщение, проверяет закрытие соединения и удаление staging-файла, а затем выполняет успешную передачу.
+
+## Ограничения
+
+- TCP-соединение не шифруется и не аутентифицируется;
+- возобновление прерванной передачи не поддерживается, мы просто рвём соединение и подчищаем связанные с этим запросом артефакты;
+- практический предел числа соединений определяется лимитом файловых дескрипторов, памятью и ресурсами ОС;
+- CRC большого файла сейчас вычисляется до начала его передачи, поэтому очень большие файлы могут занять CPU до подключения.
+
+## Дополнительные материалы
+
+- [docs/PROTOCOL.md](docs/PROTOCOL.md) — формат сообщений;
+- [docs/CONCURRENCY.md](docs/CONCURRENCY.md) — модель конкурентной работы;
+- [CLAUDE.md](CLAUDE.md) — инструкции по работе над проектом.
