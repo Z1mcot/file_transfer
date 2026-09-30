@@ -1,7 +1,7 @@
-#include "file_transfer/tcp_listener.hpp"
+#include "file_transfer/transport/tcp_listener.hpp"
 
-#include "file_transfer/tcp_transport.hpp"
-#include "tcp_socket_utils.hpp"
+#include "file_transfer/transport/tcp_transport.hpp"
+#include "file_transfer/transport/detail/tcp_socket_utils.hpp"
 
 #include <arpa/inet.h>
 #include <netdb.h>

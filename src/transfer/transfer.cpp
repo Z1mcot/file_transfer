@@ -1,6 +1,6 @@
-#include "file_transfer/transfer.hpp"
+#include "file_transfer/transfer/transfer.hpp"
 
-#include "file_transfer/crc32.hpp"
+#include "file_transfer/checksum/crc32.hpp"
 
 #include <cerrno>
 #include <sys/stat.h>

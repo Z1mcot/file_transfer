@@ -1,4 +1,4 @@
-#include "posix_staged_file.hpp"
+#include "file_transfer/storage/posix_staged_file.hpp"
 
 #include <cerrno>
 #include <cstring>

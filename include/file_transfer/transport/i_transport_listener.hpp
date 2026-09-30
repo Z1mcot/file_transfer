@@ -1,6 +1,6 @@
 #pragma once
 
-#include "file_transfer/accepted_connection.hpp"
+#include "file_transfer/transport/accepted_connection.hpp"
 
 #include <optional>
 #include <string>

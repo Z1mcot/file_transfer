@@ -1,6 +1,6 @@
 #pragma once
 
-#include "file_transfer/cli.hpp"
+#include "file_transfer/cli/cli.hpp"
 
 namespace file_transfer {
 

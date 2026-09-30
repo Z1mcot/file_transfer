@@ -1,7 +1,7 @@
 #pragma once
 
-#include "file_transfer/i_file_store.hpp"
-#include "file_transfer/i_transport_listener.hpp"
+#include "file_transfer/storage/i_file_store.hpp"
+#include "file_transfer/transport/i_transport_listener.hpp"
 
 #include <memory>
 #include <string>

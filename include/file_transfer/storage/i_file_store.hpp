@@ -1,6 +1,6 @@
 #pragma once
 
-#include "file_transfer/i_staged_file.hpp"
+#include "file_transfer/storage/i_staged_file.hpp"
 
 #include <memory>
 

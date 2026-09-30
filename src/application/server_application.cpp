@@ -1,11 +1,11 @@
-#include "file_transfer/server_application.hpp"
+#include "file_transfer/application/server_application.hpp"
 
-#include "executable_path.hpp"
-#include "logging.hpp"
-#include "server_workers.hpp"
-#include "signal_waiter.hpp"
-#include "file_transfer/file_store.hpp"
-#include "file_transfer/tcp_listener.hpp"
+#include "file_transfer/application/executable_path.hpp"
+#include "file_transfer/application/logging.hpp"
+#include "file_transfer/application/server_workers.hpp"
+#include "file_transfer/application/signal_waiter.hpp"
+#include "file_transfer/storage/file_store.hpp"
+#include "file_transfer/transport/tcp_listener.hpp"
 
 #include <algorithm>
 #include <atomic>

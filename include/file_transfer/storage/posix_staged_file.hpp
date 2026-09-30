@@ -1,7 +1,7 @@
 #pragma once
 
-#include "file_transfer/filename_generator.hpp"
-#include "file_transfer/i_staged_file.hpp"
+#include "file_transfer/storage/filename_generator.hpp"
+#include "file_transfer/storage/i_staged_file.hpp"
 
 #include <filesystem>
 #include <memory>

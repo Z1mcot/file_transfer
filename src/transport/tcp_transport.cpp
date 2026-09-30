@@ -1,6 +1,6 @@
-#include "file_transfer/tcp_transport.hpp"
+#include "file_transfer/transport/tcp_transport.hpp"
 
-#include "tcp_socket_utils.hpp"
+#include "file_transfer/transport/detail/tcp_socket_utils.hpp"
 
 #include <sys/socket.h>
 #include <unistd.h>

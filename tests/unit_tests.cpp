@@ -1,12 +1,12 @@
-#include "file_transfer/crc32.hpp"
-#include "file_transfer/cli.hpp"
-#include "file_transfer/file_store.hpp"
-#include "file_transfer/filename_generator.hpp"
-#include "file_transfer/i_file_store.hpp"
-#include "file_transfer/protocol.hpp"
-#include "file_transfer/tcp_transport.hpp"
-#include "file_transfer/transfer.hpp"
-#include "file_transfer/transport.hpp"
+#include "file_transfer/checksum/crc32.hpp"
+#include "file_transfer/cli/cli.hpp"
+#include "file_transfer/storage/file_store.hpp"
+#include "file_transfer/storage/filename_generator.hpp"
+#include "file_transfer/storage/i_file_store.hpp"
+#include "file_transfer/protocol/protocol.hpp"
+#include "file_transfer/transport/tcp_transport.hpp"
+#include "file_transfer/transfer/transfer.hpp"
+#include "file_transfer/transport/transport.hpp"
 
 #include <algorithm>
 #include <array>

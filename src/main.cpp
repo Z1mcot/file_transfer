@@ -1,9 +1,9 @@
-#include "file_transfer/cli.hpp"
-#include "file_transfer/client_application.hpp"
-#include "file_transfer/server_application.hpp"
+#include "file_transfer/cli/cli.hpp"
+#include "file_transfer/application/client_application.hpp"
+#include "file_transfer/application/server_application.hpp"
 
-#include "application/executable_path.hpp"
-#include "application/logging.hpp"
+#include "file_transfer/application/executable_path.hpp"
+#include "file_transfer/application/logging.hpp"
 
 #include <iostream>
 #include <stdexcept>

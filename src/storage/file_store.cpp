@@ -1,6 +1,6 @@
-#include "file_transfer/file_store.hpp"
+#include "file_transfer/storage/file_store.hpp"
 
-#include "posix_staged_file.hpp"
+#include "file_transfer/storage/posix_staged_file.hpp"
 
 #include <cerrno>
 #include <fcntl.h>

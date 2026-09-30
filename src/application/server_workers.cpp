@@ -1,7 +1,7 @@
-#include "server_workers.hpp"
+#include "file_transfer/application/server_workers.hpp"
 
-#include "logging.hpp"
-#include "file_transfer/transfer.hpp"
+#include "file_transfer/application/logging.hpp"
+#include "file_transfer/transfer/transfer.hpp"
 
 #include <algorithm>
 #include <atomic>

@@ -1,9 +1,9 @@
-#include "file_transfer/client_application.hpp"
+#include "file_transfer/application/client_application.hpp"
 
-#include "logging.hpp"
-#include "unique_fd.hpp"
-#include "file_transfer/tcp_connector.hpp"
-#include "file_transfer/transfer.hpp"
+#include "file_transfer/application/logging.hpp"
+#include "file_transfer/application/unique_fd.hpp"
+#include "file_transfer/transport/tcp_connector.hpp"
+#include "file_transfer/transfer/transfer.hpp"
 
 #include <fcntl.h>
 #include <unistd.h>
