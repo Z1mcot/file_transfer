@@ -16,12 +16,21 @@ target_compile_options(project_options INTERFACE
 )
 
 add_library(file_transfer_core
-    src/crc32.cpp
-    src/protocol.cpp
-    src/storage.cpp
-    src/transfer.cpp
-    src/cli.cpp
-    src/tcp_transport.cpp
+    src/checksum/crc32.cpp
+    src/protocol/protocol.cpp
+    src/storage/filename_generator.cpp
+    src/storage/file_store.cpp
+    src/storage/posix_staged_file.cpp
+    src/transfer/transfer.cpp
+    src/cli/cli.cpp
+    src/transport/tcp_transport.cpp
+    src/transport/tcp_listener.cpp
+    src/transport/tcp_connector.cpp
+    src/application/executable_path.cpp
+    src/application/signal_waiter.cpp
+    src/application/server_workers.cpp
+    src/application/server_application.cpp
+    src/application/client_application.cpp
 )
 target_include_directories(file_transfer_core PUBLIC include)
 target_link_libraries(file_transfer_core PUBLIC project_options Threads::Threads)

@@ -1,7 +1,7 @@
 #pragma once
 
+#include "file_transfer/i_file_store.hpp"
 #include "file_transfer/protocol.hpp"
-#include "file_transfer/storage.hpp"
 #include "file_transfer/transport.hpp"
 
 #include <cstdint>

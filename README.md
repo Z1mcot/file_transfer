@@ -52,6 +52,8 @@ If directory fsync fails after publication, the server attempts to remove the fi
 
 `CLI -> application -> transfer -> protocol -> ITransport -> TcpTransport`; `ITransportListener` provides the server-side accept boundary, and `IFileStore`/`IStagedFile` isolate file publication. The protocol and transfer layer use no TCP API. A future transport can implement the byte-stream interface without changing file transfer logic.
 
+Source files are grouped by responsibility: `src/cli/` parses arguments; `src/application/` contains the server/client applications and worker/signal lifecycle; `src/transfer/` implements streaming; `src/protocol/` serializes frames; `src/transport/` contains the transport adapters; `src/storage/` owns staging and output naming; and `src/checksum/` implements CRC32. Public class declarations have one class per header; concrete classes have separate translation units where they own behavior.
+
 CRC32 is implemented locally using the standard reflected IEEE polynomial. The client makes two streaming passes over a regular input file: the first computes size and whole-file CRC32, and the second sends fixed 64 KiB chunks with their individual CRC32 values. Memory use remains bounded regardless of file size.
 
 ## Protocol
