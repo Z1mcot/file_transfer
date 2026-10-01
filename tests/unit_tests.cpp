@@ -291,7 +291,7 @@ void test_frame_parser_partial_input() {
           "frame parser decoded byte-split payload incorrectly");
 
     PartialMemoryTransport two_frames;
-    write_message(two_frames, MessageType::hello, encode_hello({0U, 0U, maximum_chunk_size}));
+    write_message(two_frames, MessageType::hello, encode_hello({0U, 0U, MAXIMUM_CHUNK_SIZE}));
     write_message(two_frames, MessageType::finish, encode_finish({0U, 0U, 0U}));
     FrameParser multiple;
     multiple.feed(two_frames.bytes());
@@ -306,7 +306,7 @@ void test_frame_parser_partial_input() {
     try { truncated.finish(); } catch (const std::runtime_error&) { eof_failed = true; }
     check(eof_failed, "frame parser accepted EOF in a partial header");
 
-    std::array<std::byte, frame_header_size> invalid = {};
+    std::array<std::byte, FRAME_HEADER_SIZE> invalid = {};
     invalid[0] = std::byte{0};
     bool invalid_failed = false;
     try { FrameParser bad; bad.feed(invalid); } catch (const std::runtime_error&) { invalid_failed = true; }
@@ -407,7 +407,7 @@ void test_storage_write_failure() {
     const std::array<std::byte, 1> byte{std::byte{'x'}};
     const std::uint32_t checksum = crc32(byte);
     PartialMemoryTransport request(2U);
-    const auto hello = encode_hello({1U, checksum, maximum_chunk_size});
+    const auto hello = encode_hello({1U, checksum, MAXIMUM_CHUNK_SIZE});
     const auto data = encode_data(0U, checksum, byte);
     const auto finish = encode_finish({1U, 1U, checksum});
     write_message(request, MessageType::hello, hello);
@@ -444,7 +444,7 @@ void test_corrupt_data_block_is_not_committed() {
     const std::array<std::byte, 3> data{std::byte{0x10}, std::byte{0x20}, std::byte{0x30}};
     const std::uint32_t checksum = crc32(data);
     PartialMemoryTransport request(5U);
-    const auto hello = encode_hello({data.size(), checksum, maximum_chunk_size});
+    const auto hello = encode_hello({data.size(), checksum, MAXIMUM_CHUNK_SIZE});
     const auto corrupt_data = encode_data(0U, checksum ^ 1U, data);
     write_message(request, MessageType::hello, hello);
     write_message(request, MessageType::data, corrupt_data);
@@ -467,7 +467,7 @@ void test_partial_success_ack_does_not_append_failure_frame() {
     const std::array<std::byte, 1> data{std::byte{0x42}};
     const std::uint32_t checksum = crc32(data);
     PartialMemoryTransport request(32U);
-    write_message(request, MessageType::hello, encode_hello({1U, checksum, maximum_chunk_size}));
+    write_message(request, MessageType::hello, encode_hello({1U, checksum, MAXIMUM_CHUNK_SIZE}));
     write_message(request, MessageType::data, encode_data(0U, checksum, data));
     write_message(request, MessageType::finish, encode_finish({1U, 1U, checksum}));
 
@@ -491,7 +491,7 @@ void test_published_file_with_cleanup_warning_is_success() {
     using namespace file_transfer::protocol;
     PartialMemoryTransport request(32U);
     write_message(request, MessageType::hello,
-                  encode_hello({0U, crc32(std::span<const std::byte>{}), maximum_chunk_size}));
+                  encode_hello({0U, crc32(std::span<const std::byte>{}), MAXIMUM_CHUNK_SIZE}));
     write_message(request, MessageType::finish, encode_finish({0U, 0U, 0U}));
 
     FailingResponseTransport transport(request.bytes(), std::numeric_limits<std::size_t>::max());

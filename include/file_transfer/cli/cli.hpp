@@ -11,10 +11,12 @@
 namespace file_transfer {
 
 struct HelpOptions {};
+
 struct ServerOptions {
     std::uint16_t port = 5000;
     std::uint64_t idle_timeout_ms = 30000U;
 };
+
 struct ClientOptions {
     std::filesystem::path file;
     std::vector<std::filesystem::path> files;

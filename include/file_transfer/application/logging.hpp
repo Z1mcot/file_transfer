@@ -11,6 +11,7 @@ namespace file_transfer::application {
 inline void log_line(std::string_view message) {
     static std::mutex mutex;
     std::lock_guard lock(mutex);
+    
     std::cout << message << std::endl;
 }
 

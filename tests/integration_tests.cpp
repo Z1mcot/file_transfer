@@ -24,10 +24,13 @@
 #include <vector>
 
 #include "file_transfer/protocol/protocol.hpp"
+#include "file_transfer/utils/byte_utils.hpp"
 
 namespace {
 
 using namespace std::chrono_literals;
+
+namespace bu = file_transfer::byte_utils;
 
 void check(bool condition, const std::string& message) {
     if (!condition) {
@@ -555,17 +558,6 @@ void test_multi_file_client(const Server& server, const std::filesystem::path& r
           "multi-file failure left staging state behind");
 }
 
-void append_u16(std::vector<std::byte>& bytes, std::uint16_t value) {
-    bytes.push_back(static_cast<std::byte>((value >> 8U) & 0xFFU));
-    bytes.push_back(static_cast<std::byte>(value & 0xFFU));
-}
-
-void append_u32(std::vector<std::byte>& bytes, std::uint32_t value) {
-    for (int shift = 24; shift >= 0; shift -= 8) {
-        bytes.push_back(static_cast<std::byte>((value >> static_cast<unsigned>(shift)) & 0xFFU));
-    }
-}
-
 void test_timeout_lane(const std::filesystem::path& original_executable) {
     TemporaryDirectory temporary;
     const auto root = temporary.path();
@@ -578,13 +570,13 @@ void test_timeout_lane(const std::filesystem::path& original_executable) {
     const int stalled = server.connect_idle_client();
 
     std::vector<std::byte> hello;
-    append_u32(hello, 0x4654524EU);
-    append_u16(hello, file_transfer::protocol::version);
-    append_u16(hello, static_cast<std::uint16_t>(file_transfer::protocol::MessageType::hello));
-    append_u32(hello, 16U);
-    append_u32(hello, 4096U);
-    append_u32(hello, 0U);
-    append_u32(hello, file_transfer::protocol::maximum_chunk_size);
+    bu::append_u32(hello, file_transfer::protocol::MAGIC_NUM);
+    bu::append_u16(hello, file_transfer::protocol::VERSION);
+    bu::append_u16(hello, static_cast<std::uint16_t>(file_transfer::protocol::MessageType::hello));
+    bu::append_u32(hello, 16U);
+    bu::append_u32(hello, 4096U);
+    bu::append_u32(hello, 0U);
+    bu::append_u32(hello, file_transfer::protocol::MAXIMUM_CHUNK_SIZE);
     check(::send(stalled, hello.data(), hello.size(), 0) == static_cast<ssize_t>(hello.size()),
           "could not send timeout test HELLO");
     const std::array<std::byte, 1> partial_data{std::byte{0x46}};

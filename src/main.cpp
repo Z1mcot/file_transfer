@@ -40,6 +40,7 @@ int main(int argc, char** argv) {
             file_transfer::application::log_parts("[CLIENT] Transfer failed: ", error.what());
             return 1;
         }
+        
     } catch (const std::exception& error) {
         std::cerr << "[ERROR] " << error.what() << '\n'
                   << file_transfer::usage_text();

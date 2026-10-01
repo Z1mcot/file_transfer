@@ -10,9 +10,12 @@
 
 namespace file_transfer::protocol {
 
-inline constexpr std::uint16_t version = 1;
-inline constexpr std::uint32_t maximum_chunk_size = 64U * 1024U;
-inline constexpr std::size_t frame_header_size = 12;
+inline constexpr std::uint32_t MAXIMUM_CHUNK_SIZE = 64U * 1024U;
+inline constexpr std::uint32_t MAGIC_NUM = 0x4654524EU;
+inline constexpr std::size_t MAXIMUM_FRAME_PAYLOAD = MAXIMUM_CHUNK_SIZE + 16U;
+inline constexpr std::size_t MAXIMUM_RESULT_MESSAGE_SIZE = 512U;
+inline constexpr std::uint16_t VERSION = 1;
+inline constexpr std::size_t FRAME_HEADER_SIZE = 12;
 
 enum class MessageType : std::uint16_t {
     hello = 1,
@@ -54,13 +57,17 @@ void write_message(ITransport& transport, MessageType type, std::span<const std:
 
 [[nodiscard]] std::vector<std::byte> encode_hello(const Hello& value);
 [[nodiscard]] Hello decode_hello(std::span<const std::byte> bytes);
+
 [[nodiscard]] std::vector<std::byte> encode_data(
     std::uint64_t sequence,
     std::uint32_t checksum,
     std::span<const std::byte> bytes);
+
 [[nodiscard]] DataView decode_data(std::span<const std::byte> bytes);
+
 [[nodiscard]] std::vector<std::byte> encode_finish(const Finish& value);
 [[nodiscard]] Finish decode_finish(std::span<const std::byte> bytes);
+
 [[nodiscard]] std::vector<std::byte> encode_result(const Result& value);
 [[nodiscard]] Result decode_result(std::span<const std::byte> bytes);
 

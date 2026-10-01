@@ -6,7 +6,7 @@ The server previously created one blocking worker thread for every accepted sock
 
 ## Event loop
 
-The server now owns one level-triggered event loop. Linux uses `epoll`; the macOS build uses `kqueue` so the same tests can run locally. A listener callback drains `accept()` until `EAGAIN`. Accepted sockets are non-blocking.
+The server owns one level-triggered Linux `epoll` loop. A listener callback drains non-blocking `accept()` until `EAGAIN`.
 
 The event loop stores registrations in an owning map. The callback registration is retired until the current wait batch finishes, so removing a handler cannot free the object behind an already returned readiness event. A handler owns its transport, parser, transfer counters, staging file, and pending output.
 
@@ -18,17 +18,17 @@ Each client file is an independent `ClientTransfer`. A scheduler keeps at most `
 
 ## Readiness and fairness
 
-`EPOLLIN`/`EPOLLOUT` (or their kqueue equivalents) are enabled only for work that can be performed. A pending RESULT is a byte queue: partial writes preserve the unsent suffix and disable write interest after the queue drains. One read callback consumes at most 256 KiB before returning to dispatch.
+`EPOLLIN`/`EPOLLOUT` are enabled only for work that can be performed. A pending RESULT is a byte queue: partial writes preserve the unsent suffix and disable write interest after the queue drains. One read callback consumes at most 256 KiB before returning to dispatch.
 
 ## Timeouts
 
-On Linux a `timerfd` wakes the loop for activity deadlines. The same activity timestamp covers receive inactivity and a stalled pending write. The default is approximately 30 seconds; `--idle-timeout-ms` makes integration tests fast. A timeout removes the registration, closes the socket, and discards staging state.
+`timerfd` wakes the loop for activity deadlines. The same activity timestamp covers receive inactivity and a stalled pending write. The default is approximately 30 seconds; `--idle-timeout-ms` makes integration tests fast. A timeout removes the registration, closes the socket, and discards staging state.
 
 The dedicated CTest `timeout` lane sends a complete HELLO followed by an incomplete DATA frame, verifies timeout cleanup, then completes a recovery transfer.
 
 ## Shutdown
 
-SIGINT and SIGTERM stop accepting work, wake the loop, close active handlers, and leave the output directory with no partial staging state. `MSG_NOSIGNAL` and ignored SIGPIPE prevent a broken peer from terminating the process.
+`signalfd` delivers SIGINT and SIGTERM to the loop. Shutdown stops accepting work, closes active handlers, and leaves the output directory with no partial staging state. `MSG_NOSIGNAL` and ignored SIGPIPE prevent a broken peer from terminating the process.
 
 ## Scaling and limitations
 

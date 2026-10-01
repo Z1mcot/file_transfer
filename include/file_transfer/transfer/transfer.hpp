@@ -23,6 +23,7 @@ struct ReceivedFile {
 using TransferStarted = std::function<void(std::uint64_t)>;
 
 [[nodiscard]] FileMetadata calculate_file_metadata(int descriptor);
+
 void send_file(ITransport& transport, int descriptor, const FileMetadata& metadata);
 [[nodiscard]] ReceivedFile receive_file(
     ITransport& transport,

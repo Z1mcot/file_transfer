@@ -37,6 +37,131 @@ std::string remove_staging_directory(int output_directory, const std::string& na
     return {};
 }
 
+class ScopedDescriptor final {
+public:
+    explicit ScopedDescriptor(int descriptor = -1) noexcept : descriptor_(descriptor) {}
+    ~ScopedDescriptor() {
+        if (descriptor_ >= 0) {
+            ::close(descriptor_);
+        }
+    }
+
+    ScopedDescriptor(const ScopedDescriptor&) = delete;
+    ScopedDescriptor& operator=(const ScopedDescriptor&) = delete;
+
+    [[nodiscard]] int get() const noexcept { return descriptor_; }
+    int release() noexcept { return std::exchange(descriptor_, -1); }
+    void reset() noexcept {
+        if (descriptor_ >= 0) {
+            ::close(std::exchange(descriptor_, -1));
+        }
+    }
+
+private:
+    int descriptor_;
+};
+
+std::string with_cleanup_error(std::string message, const std::string& cleanup_error) {
+    if (!cleanup_error.empty()) {
+        message += "; " + cleanup_error;
+    }
+    return message;
+}
+
+int open_private_staging_directory(int output_directory, const std::string& staging_name) {
+    const int descriptor = ::openat(
+        output_directory, staging_name.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (descriptor < 0) {
+        const int error = errno;
+        const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
+        throw std::system_error(error, std::generic_category(),
+                                with_cleanup_error("open private staging directory", cleanup_error));
+    }
+
+    struct stat information {};
+    if (::fstat(descriptor, &information) < 0) {
+        const int error = errno;
+        ::close(descriptor);
+        const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
+        throw std::system_error(error, std::generic_category(),
+                                with_cleanup_error("stat private staging directory", cleanup_error));
+    }
+
+    if (!S_ISDIR(information.st_mode) || information.st_uid != ::geteuid() ||
+        (information.st_mode & 0077) != 0) {
+        ::close(descriptor);
+        const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
+        throw std::runtime_error(with_cleanup_error(
+            "private staging directory has unsafe ownership or permissions", cleanup_error));
+    }
+
+    return descriptor;
+}
+
+std::unique_ptr<IStagedFile> create_staged_file_attempt(
+    const std::filesystem::path& directory,
+    const std::shared_ptr<FilenameGenerator>& filenames,
+    const std::string& staging_name) {
+    ScopedDescriptor output_directory(::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    if (output_directory.get() < 0) {
+        throw_file_error("open output directory");
+    }
+
+    if (::mkdirat(output_directory.get(), staging_name.c_str(), 0700) < 0) {
+        const int error = errno;
+        if (error == EEXIST) {
+            return nullptr;
+        }
+        errno = error;
+        throw_file_error("create private staging directory");
+    }
+
+    ScopedDescriptor staging_directory(
+        open_private_staging_directory(output_directory.get(), staging_name));
+    const int descriptor = ::openat(staging_directory.get(), staged_filename,
+                                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (descriptor >= 0) {
+        try {
+            auto staged_file = std::make_unique<PosixStagedFile>(
+                descriptor, staging_directory.get(), output_directory.get(), staging_name, directory, filenames);
+            staging_directory.release();
+            output_directory.release();
+            return staged_file;
+        } catch (...) {
+            ::unlinkat(staging_directory.get(), staged_filename, 0);
+            ::close(descriptor);
+            staging_directory.reset();
+            const std::string cleanup_error = remove_staging_directory(output_directory.get(), staging_name);
+            if (!cleanup_error.empty()) {
+                std::cerr << "[STORAGE] Setup cleanup failed: " << cleanup_error << '\n';
+            }
+            throw;
+        }
+    }
+
+    const int error = errno;
+    std::string payload_cleanup_error;
+    if (error == EEXIST && ::unlinkat(staging_directory.get(), staged_filename, 0) < 0 && errno != ENOENT) {
+        payload_cleanup_error = std::string("could not remove colliding staged payload: ") +
+                                std::strerror(errno);
+    }
+
+    staging_directory.reset();
+    const std::string cleanup_error = remove_staging_directory(output_directory.get(), staging_name);
+    if (!payload_cleanup_error.empty()) {
+        std::cerr << "[STORAGE] Staging collision cleanup failed: " << payload_cleanup_error << '\n';
+    }
+    if (error != EEXIST) {
+        throw std::system_error(error, std::generic_category(),
+                                with_cleanup_error(with_cleanup_error("create staged file", payload_cleanup_error),
+                                                   cleanup_error));
+    }
+    if (!cleanup_error.empty()) {
+        std::cerr << "[STORAGE] Staging collision cleanup failed: " << cleanup_error << '\n';
+    }
+    return nullptr;
+}
+
 } // namespace
 
 FileStore::FileStore(std::filesystem::path directory)
@@ -51,89 +176,8 @@ std::unique_ptr<IStagedFile> FileStore::create_staged_file() {
         const std::uint64_t sequence = temporary_sequence.fetch_add(1U, std::memory_order_relaxed);
         const std::string staging_name = ".file_transfer." + std::to_string(::getpid()) + "." +
                                          std::to_string(sequence);
-        const int output_directory = ::open(directory_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (output_directory < 0) {
-            throw_file_error("open output directory");
-        }
-        if (::mkdirat(output_directory, staging_name.c_str(), 0700) < 0) {
-            const int error = errno;
-            ::close(output_directory);
-            if (error == EEXIST) {
-                continue;
-            }
-            errno = error;
-            throw_file_error("create private staging directory");
-        }
-
-        const int staging_directory = ::openat(
-            output_directory, staging_name.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-        if (staging_directory < 0) {
-            const int error = errno;
-            const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
-            ::close(output_directory);
-            errno = error;
-            throw std::system_error(error, std::generic_category(),
-                                    "open private staging directory" +
-                                        (cleanup_error.empty() ? std::string{} : "; " + cleanup_error));
-        }
-        struct stat staging_information {};
-        if (::fstat(staging_directory, &staging_information) < 0) {
-            const int error = errno;
-            ::close(staging_directory);
-            const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
-            ::close(output_directory);
-            errno = error;
-            throw std::system_error(error, std::generic_category(),
-                                    "stat private staging directory" +
-                                        (cleanup_error.empty() ? std::string{} : "; " + cleanup_error));
-        }
-        if (!S_ISDIR(staging_information.st_mode) || staging_information.st_uid != ::geteuid() ||
-            (staging_information.st_mode & 0077) != 0) {
-            ::close(staging_directory);
-            const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
-            ::close(output_directory);
-            throw std::runtime_error("private staging directory has unsafe ownership or permissions" +
-                                     (cleanup_error.empty() ? std::string{} : "; " + cleanup_error));
-        }
-        const int descriptor = ::openat(staging_directory, staged_filename,
-                                        O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-        if (descriptor >= 0) {
-            try {
-                return std::make_unique<PosixStagedFile>(descriptor, staging_directory, output_directory,
-                                                         staging_name, directory_, filenames_);
-            } catch (...) {
-                ::unlinkat(staging_directory, staged_filename, 0);
-                ::close(descriptor);
-                ::close(staging_directory);
-                const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
-                ::close(output_directory);
-                if (!cleanup_error.empty()) {
-                    std::cerr << "[STORAGE] Setup cleanup failed: " << cleanup_error << '\n';
-                }
-                throw;
-            }
-        }
-        const int error = errno;
-        std::string payload_cleanup_error;
-        if (error == EEXIST && ::unlinkat(staging_directory, staged_filename, 0) < 0 && errno != ENOENT) {
-            payload_cleanup_error = std::string("could not remove colliding staged payload: ") +
-                                    std::strerror(errno);
-        }
-        ::close(staging_directory);
-        const std::string cleanup_error = remove_staging_directory(output_directory, staging_name);
-        ::close(output_directory);
-        if (!payload_cleanup_error.empty()) {
-            std::cerr << "[STORAGE] Staging collision cleanup failed: " << payload_cleanup_error << '\n';
-        }
-        if (error != EEXIST) {
-            errno = error;
-            throw std::system_error(error, std::generic_category(),
-                                    "create staged file" +
-                                        (payload_cleanup_error.empty() ? std::string{} : "; " + payload_cleanup_error) +
-                                        (cleanup_error.empty() ? std::string{} : "; " + cleanup_error));
-        }
-        if (!cleanup_error.empty()) {
-            std::cerr << "[STORAGE] Staging collision cleanup failed: " << cleanup_error << '\n';
+        if (auto staged_file = create_staged_file_attempt(directory_, filenames_, staging_name)) {
+            return staged_file;
         }
     }
     throw std::runtime_error("could not allocate a unique temporary filename");

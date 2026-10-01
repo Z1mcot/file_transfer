@@ -27,11 +27,15 @@ private:
         const std::filesystem::path& destination_path);
 
     int descriptor_;
+
     int staging_directory_;
     int output_directory_;
+    
     std::string staging_name_;
+    
     std::filesystem::path directory_;
     std::shared_ptr<FilenameGenerator> filenames_;
+    
     bool published_ = false;
 };
 
