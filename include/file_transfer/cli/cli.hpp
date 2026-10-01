@@ -10,7 +10,9 @@
 
 namespace file_transfer {
 
-struct HelpOptions {};
+struct HelpOptions {
+    
+};
 
 struct ServerOptions {
     std::uint16_t port = 5000;

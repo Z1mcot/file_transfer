@@ -11,54 +11,6 @@ namespace bu = file_transfer::byte_utils;
 
 namespace file_transfer::protocol {
 
-void write_message(ITransport& transport, MessageType type, std::span<const std::byte> payload) {
-    
-    if (payload.size() > MAXIMUM_FRAME_PAYLOAD ||
-        payload.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-        throw std::runtime_error("message payload is too large");
-    }
-
-    std::vector<std::byte> header;
-    header.reserve(FRAME_HEADER_SIZE);
-
-    bu::append_u32(header, MAGIC_NUM);
-    bu::append_u16(header, VERSION);
-    bu::append_u16(header, static_cast<std::uint16_t>(type));
-    bu::append_u32(header, static_cast<std::uint32_t>(payload.size()));
-    
-    write_all(transport, header);
-    write_all(transport, payload);
-}
-
-Message read_message(ITransport& transport) {
-    std::array<std::byte, FRAME_HEADER_SIZE> header{};
-    read_exact(transport, header);
-    std::size_t offset = 0;
-
-    const std::uint32_t received_magic = bu::take_u32(header, offset);
-    const std::uint16_t received_version = bu::take_u16(header, offset);
-    const std::uint16_t raw_type = bu::take_u16(header, offset);
-    const std::uint32_t payload_size = bu::take_u32(header, offset);
-    
-    if (received_magic != MAGIC_NUM) {
-        throw std::runtime_error("invalid protocol magic");
-    }
-    if (received_version != VERSION) {
-        throw std::runtime_error("unsupported protocol version");
-    }
-    if (raw_type < static_cast<std::uint16_t>(MessageType::hello) ||
-        raw_type > static_cast<std::uint16_t>(MessageType::result)) {
-        throw std::runtime_error("unknown message type");
-    }
-    if (payload_size > MAXIMUM_FRAME_PAYLOAD) {
-        throw std::runtime_error("message payload exceeds protocol limit");
-    }
-
-    Message message{static_cast<MessageType>(raw_type), std::vector<std::byte>(payload_size)};
-    read_exact(transport, message.payload);
-    return message;
-}
-
 std::vector<std::byte> encode_hello(const Hello& value) {
     std::vector<std::byte> bytes;
     bytes.reserve(16U);

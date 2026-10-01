@@ -17,6 +17,10 @@ class INonBlockingTransport {
 public:
     virtual ~INonBlockingTransport() = default;
     [[nodiscard]] virtual int fd() const noexcept = 0;
+
+    virtual void shutdown_write() noexcept {}
+
+    virtual void cancel() noexcept = 0;
     
     virtual NonBlockingResult recv_nonblocking(std::span<std::byte> buffer) noexcept = 0;
     virtual NonBlockingResult send_nonblocking(std::span<const std::byte> buffer) noexcept = 0;

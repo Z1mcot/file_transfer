@@ -1,7 +1,5 @@
 #pragma once
 
-#include "file_transfer/transport/transport.hpp"
-
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -51,9 +49,6 @@ struct Result {
     std::uint16_t code;
     std::string message;
 };
-
-void write_message(ITransport& transport, MessageType type, std::span<const std::byte> payload);
-[[nodiscard]] Message read_message(ITransport& transport);
 
 [[nodiscard]] std::vector<std::byte> encode_hello(const Hello& value);
 [[nodiscard]] Hello decode_hello(std::span<const std::byte> bytes);

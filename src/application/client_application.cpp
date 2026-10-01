@@ -3,6 +3,7 @@
 #include "file_transfer/application/event_loop.hpp"
 #include "file_transfer/application/logging.hpp"
 #include "file_transfer/application/unique_fd.hpp"
+#include "file_transfer/application/config.hpp"
 #include "file_transfer/checksum/crc32.hpp"
 #include "file_transfer/protocol/frame_parser.hpp"
 #include "file_transfer/transport/nonblocking_transport.hpp"
@@ -29,11 +30,11 @@
 
 namespace file_transfer
 {
-    // PImpl of the client application, which manages multiple concurrent file transfers to a server.
+    // Impl of the client application, which manages multiple concurrent file transfers to a server.
     namespace
     {
 
-        inline constexpr std::size_t DISPATCH_BUDGET = 256U * 1024U;
+        inline constexpr std::size_t DISPATCH_BUDGET = file_transfer::application::config::DISPATCH_BUDGET;
 
         namespace bu = byte_utils;
 
@@ -49,28 +50,6 @@ namespace file_transfer
 
             result.insert(result.end(), payload.begin(), payload.end());
             return result;
-        }
-
-        void pread_exact(int descriptor, std::span<std::byte> buffer, std::uint64_t offset)
-        {
-            std::size_t completed = 0U;
-            while (completed < buffer.size())
-            {
-                const ssize_t count = ::pread(descriptor, buffer.data() + completed, buffer.size() - completed,
-                                              static_cast<off_t>(offset + completed));
-
-                if (count > 0)
-                {
-                    completed += static_cast<std::size_t>(count);
-                    continue;
-                }
-                if (count < 0 && errno == EINTR)
-                    continue;
-                if (count == 0)
-                    throw std::runtime_error("input file ended before its declared size");
-
-                throw std::system_error(errno, std::generic_category(), "read input file");
-            }
         }
 
         class ClientTransfer final : public std::enable_shared_from_this<ClientTransfer>
@@ -99,9 +78,17 @@ namespace file_transfer
             [[nodiscard]] int fd() const noexcept { return stream_->fd(); }
             [[nodiscard]] bool done() const noexcept { return done_; }
             [[nodiscard]] bool failed() const noexcept { return failed_; }
+            [[nodiscard]] const std::string &error() const noexcept { return error_; }
+            
             [[nodiscard]] const std::filesystem::path &path() const noexcept { return path_; }
 
             void on_event(application::EventLoop &loop, std::uint32_t events)
+            {
+                try { handle_event(loop, events); }
+                catch (const std::exception &error) { fail(error.what()); }
+            }
+
+            void handle_event(application::EventLoop &loop, std::uint32_t events)
             {
                 if (state_ == State::connecting && (events & application::event_write) != 0U)
                 {
@@ -339,7 +326,8 @@ namespace file_transfer
                     if (transfer->failed())
                     {
                         ++failed_;
-                        application::log_parts("[CLIENT] Transfer failed: ", transfer->path().string());
+                        application::log_parts("[CLIENT] Transfer failed: ", transfer->path().string(),
+                                        ": ", transfer->error());
                     }
 
                     active_.erase(iterator);
@@ -367,8 +355,6 @@ namespace file_transfer
                         std::weak_ptr<ClientScheduler> weak_scheduler = shared_from_this();
                         std::weak_ptr<ClientTransfer> weak_transfer = transfer;
 
-                        active_[descriptor] = transfer;
-
                         loop_.add(descriptor, application::event_read | application::event_write | application::event_error | application::event_hangup,
                                   [weak_scheduler, weak_transfer, descriptor](std::uint32_t events)
                                   {
@@ -377,6 +363,8 @@ namespace file_transfer
                                           weak_scheduler.lock()->on_event(descriptor, events);
                                       }
                                   });
+
+                        active_[descriptor] = transfer;
 
                         application::log_parts("[CLIENT] Transfer started: ", path.string(), " (", transfer->path().string(), ")");
                     }

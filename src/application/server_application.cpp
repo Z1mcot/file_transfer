@@ -4,6 +4,7 @@
 #include "file_transfer/application/logging.hpp"
 #include "file_transfer/application/signal_waiter.hpp"
 #include "file_transfer/application/unique_fd.hpp"
+#include "file_transfer/application/config.hpp"
 #include "file_transfer/checksum/crc32.hpp"
 #include "file_transfer/protocol/frame_parser.hpp"
 #include "file_transfer/storage/file_store.hpp"
@@ -24,11 +25,12 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <cerrno>
 
 namespace file_transfer {
 namespace {
 
-inline constexpr std::size_t DISPATCH_BUDGET = 256U * 1024U;
+inline constexpr std::size_t DISPATCH_BUDGET = application::config::DISPATCH_BUDGET;
 
 namespace bu = byte_utils;
 
@@ -64,13 +66,11 @@ public:
     }
 
     void on_event(application::EventLoop& loop, std::uint32_t events) {
-        if ((events & application::event_error) != 0U || (events & application::event_hangup) != 0U) {
-            fail(loop, "socket closed by peer");
+        if ((events & (application::event_error | application::event_hangup)) != 0U) {
+            fail(loop, "socket closed by peer", false);   // пир ушёл, отвечать некому
             return;
         }
-    
         if ((events & application::event_read) != 0U) read_available(loop);
-    
         if (!dead_ && (events & application::event_write) != 0U) write_available(loop);
     }
 
@@ -92,20 +92,21 @@ private:
         std::array<std::byte, protocol::MAXIMUM_CHUNK_SIZE> buffer{};
         std::size_t budget = DISPATCH_BUDGET;
         
-        while (budget > 0U && !dead_) {
+        while (budget > 0U && !dead_ && state_ != State::sending_result) {
             const std::size_t requested = std::min(buffer.size(), budget);
             const NonBlockingResult result = stream_->recv_nonblocking(std::span<std::byte>(buffer.data(), requested));
         
             if (result.status == NonBlockingStatus::progress) {
-                last_activity_ = std::chrono::steady_clock::now();
                 budget -= result.count;
-        
+                if (state_ == State::draining) continue;   // выбрасываем, activity не продлеваем
+                
+                last_activity_ = std::chrono::steady_clock::now();
                 try {
                     parser_.feed(std::span<const std::byte>(buffer.data(), result.count));
         
                     while (parser_.has_message()) {
                         process(parser_.pop_message(), loop);
-                        if (dead_) return;
+                        if (dead_ || state_ == State::sending_result) return;
                     }
                 } catch (const std::exception& error) {
                     fail(loop, error.what());
@@ -115,6 +116,8 @@ private:
                 continue;
             }
             if (result.status == NonBlockingStatus::would_block) return;
+
+            if (state_ == State::draining) { close(loop); return; }   // клиент положил трубку
         
             if (result.status == NonBlockingStatus::eof) {
                 try { parser_.finish(); }
@@ -186,31 +189,33 @@ private:
         throw std::runtime_error("unexpected message after FINISH");
     }
 
-    void fail(application::EventLoop& loop, std::string message) {
+    void fail(application::EventLoop& loop, std::string message, bool can_reply = true) {
         if (dead_) return;
         application::log_parts("[SERVER] Transfer failed: ", message);
         if (staged_) {
             try { staged_->discard(); } catch (...) {}
             staged_.reset();
         }
-        if (state_ != State::sending_result) {
-            if (message.size() > protocol::MAXIMUM_RESULT_MESSAGE_SIZE) 
-                message.resize(protocol::MAXIMUM_RESULT_MESSAGE_SIZE);
-            
-            try {
-                queue_result(loop, {1U, message});
-                state_ = State::sending_result;
-                return;
-            } catch (...) {}
+        if (!can_reply || state_ == State::sending_result || state_ == State::draining) {
+            close(loop);
+            return;
         }
-        close(loop);
+        if (message.size() > protocol::MAXIMUM_RESULT_MESSAGE_SIZE)
+            message.resize(protocol::MAXIMUM_RESULT_MESSAGE_SIZE);
+        try {
+            queue_result(loop, {1U, message});
+            state_ = State::sending_result;
+            failed_ = true;
+        } catch (...) {
+            close(loop);
+        }
     }
 
     void queue_result(application::EventLoop& loop, const protocol::Result& result) {
         const auto payload = protocol::encode_result(result);
         output_ = encode_message(protocol::MessageType::result, payload);
         output_offset_ = 0U;
-        loop.modify(fd(), application::event_read | application::event_write);
+        loop.modify(fd(), application::event_write);   // читать больше не нужно
     }
 
     void write_available(application::EventLoop& loop) {
@@ -228,11 +233,19 @@ private:
             close(loop);
             return;
         }
-        close(loop);
+        
+        if (!failed_) { close(loop); return; }          // успех: клиент всё отправил
+        stream_->shutdown_write();                       // FIN после RESULT, без RST
+        state_ = State::draining;
+        
+        output_.clear();
+        output_offset_ = 0U;
+        last_activity_ = std::chrono::steady_clock::now();
+        loop.modify(fd(), application::event_read);      // EPOLLOUT снят
     }
 
-    enum class State { await_hello, receiving, await_finish, sending_result };
-    std::unique_ptr<ITransport> transport_;
+    enum class State { await_hello, receiving, await_finish, sending_result, draining };
+    std::unique_ptr<INonBlockingTransport> transport_;
     INonBlockingTransport* stream_;
     
     std::shared_ptr<IFileStore> store_;
@@ -253,6 +266,7 @@ private:
     
     State state_ = State::await_hello;
     bool dead_ = false;
+    bool failed_ = false;
     
     std::chrono::steady_clock::time_point last_activity_ = std::chrono::steady_clock::now();
 };
@@ -290,6 +304,14 @@ void ServerApplication::run() {
         prune_dead_connections();
     };
 
+    bool accept_paused = false;
+    const auto pause_accept = [&]() {
+        if (accept_paused) return;
+        accept_paused = true;
+        loop.modify(listener.fd(), 0U);
+        application::log_line("[SERVER] Out of descriptors, accept paused");
+    };
+
     application::log_parts("[SERVER] Listening on ", listener.local_endpoint());
     loop.add(listener.fd(), application::event_read, [&](std::uint32_t) {
         for (;;) {
@@ -313,6 +335,14 @@ void ServerApplication::run() {
                          });
                 
                 connections.push_back(std::move(connection));
+            } catch (const std::system_error& error) {
+                application::log_parts("[SERVER] Accept failed: ", error.what());
+                const int code = error.code().value();
+                if (code == EMFILE || code == ENFILE ||
+                    code == ENOBUFS || code == ENOMEM) {
+                    pause_accept();
+                }
+                break;
             } catch (const std::exception& error) {
                 application::log_parts("[SERVER] Accept failed: ", error.what());
                 break;
@@ -343,6 +373,10 @@ void ServerApplication::run() {
     loop.add(timer.get(), application::event_read, [&](std::uint32_t) {
         std::uint64_t expirations = 0;
         (void)::read(timer.get(), &expirations, sizeof(expirations));
+        if (accept_paused) {
+            accept_paused = false;
+            loop.modify(listener.fd(), application::event_read);
+        }
         check_timeouts();
     });
     loop.run();

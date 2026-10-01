@@ -29,30 +29,6 @@ TcpTransport::~TcpTransport() {
     }
 }
 
-std::size_t TcpTransport::read_some(std::span<std::byte> buffer) {
-    for (;;) {
-        const ssize_t count = ::recv(descriptor_, buffer.data(), buffer.size(), 0);
-        if (count >= 0) {
-            return static_cast<std::size_t>(count);
-        }
-        if (errno != EINTR) {
-            detail::throw_socket_error("recv");
-        }
-    }
-}
-
-std::size_t TcpTransport::write_some(std::span<const std::byte> buffer) {
-    for (;;) {
-        const ssize_t count = ::send(descriptor_, buffer.data(), buffer.size(), MSG_NOSIGNAL);
-        if (count >= 0) {
-            return static_cast<std::size_t>(count);
-        }
-        if (errno != EINTR) {
-            detail::throw_socket_error("send");
-        }
-    }
-}
-
 void TcpTransport::cancel() noexcept {
     if (descriptor_ >= 0) {
         ::shutdown(descriptor_, SHUT_RDWR);
@@ -81,6 +57,10 @@ NonBlockingResult TcpTransport::send_nonblocking(std::span<const std::byte> buff
         if (errno == EAGAIN || errno == EWOULDBLOCK) return {NonBlockingStatus::would_block, 0, errno};
         return {NonBlockingStatus::error, 0, errno};
     }
+}
+
+void TcpTransport::shutdown_write() noexcept {
+    if (descriptor_ >= 0) ::shutdown(descriptor_, SHUT_WR);
 }
 
 

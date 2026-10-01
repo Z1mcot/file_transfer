@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <limits.h>
+#include <limits>
 
 #include <stdexcept>
 
