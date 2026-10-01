@@ -22,9 +22,7 @@ Each client file is an independent `ClientTransfer`. A scheduler keeps at most `
 
 ## Timeouts
 
-`timerfd` wakes the loop for activity deadlines. The same activity timestamp covers receive inactivity and a stalled pending write. The default is approximately 30 seconds; `--idle-timeout-ms` makes integration tests fast. A timeout removes the registration, closes the socket, and discards staging state.
-
-The dedicated CTest `timeout` lane sends a complete HELLO followed by an incomplete DATA frame, verifies timeout cleanup, then completes a recovery transfer.
+`timerfd` wakes the loop for activity deadlines. The same activity timestamp covers receive inactivity and a stalled pending write. The default is approximately 30 seconds; `--idle-timeout-ms` controls the timeout. A timeout removes the registration, closes the socket, and discards staging state.
 
 ## Shutdown
 
