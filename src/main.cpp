@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
         }
         if (const auto* server = std::get_if<file_transfer::ServerOptions>(&command)) {
             file_transfer::ServerApplication application(
-                server->port, file_transfer::application::executable_directory());
+                server->port, file_transfer::application::executable_directory(), server->idle_timeout_ms);
             application.run();
             return 0;
         }
@@ -40,6 +40,7 @@ int main(int argc, char** argv) {
             file_transfer::application::log_parts("[CLIENT] Transfer failed: ", error.what());
             return 1;
         }
+        
     } catch (const std::exception& error) {
         std::cerr << "[ERROR] " << error.what() << '\n'
                   << file_transfer::usage_text();

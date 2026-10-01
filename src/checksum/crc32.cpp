@@ -8,6 +8,7 @@ namespace {
 
 constexpr std::array<std::uint32_t, 256> make_table() {
     std::array<std::uint32_t, 256> table{};
+    
     for (std::size_t index = 0; index < table.size(); ++index) {
         std::uint32_t value = static_cast<std::uint32_t>(index);
         for (int bit = 0; bit < 8; ++bit) {
@@ -15,6 +16,7 @@ constexpr std::array<std::uint32_t, 256> make_table() {
         }
         table[index] = value;
     }
+    
     return table;
 }
 

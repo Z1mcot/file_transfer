@@ -3,14 +3,16 @@
 #include <iostream>
 #include <sstream>
 #include <string_view>
-#include <syncstream>
+#include <mutex>
 #include <utility>
 
 namespace file_transfer::application {
 
 inline void log_line(std::string_view message) {
-    std::osyncstream output(std::cout);
-    output << message << std::endl;
+    static std::mutex mutex;
+    std::lock_guard lock(mutex);
+    
+    std::cout << message << std::endl;
 }
 
 template <typename... Parts>

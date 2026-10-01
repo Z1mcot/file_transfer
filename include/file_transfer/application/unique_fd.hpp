@@ -12,8 +12,10 @@ public:
             ::close(descriptor_);
         }
     }
+
     UniqueFd(const UniqueFd&) = delete;
     UniqueFd& operator=(const UniqueFd&) = delete;
+    
     [[nodiscard]] int get() const noexcept { return descriptor_; }
 
 private:

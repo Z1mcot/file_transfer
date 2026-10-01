@@ -11,7 +11,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <syncstream>
 #include <system_error>
 #include <utility>
 
@@ -37,10 +36,10 @@ PosixStagedFile::~PosixStagedFile() {
     try {
         discard();
     } catch (const std::exception& error) {
-        std::osyncstream(std::cerr) << "[STORAGE] Staging cleanup failed: " << error.what() << '\n';
+        std::cerr << "[STORAGE] Staging cleanup failed: " << error.what() << '\n';
         close_descriptors();
     } catch (...) {
-        std::osyncstream(std::cerr) << "[STORAGE] Staging cleanup failed: unknown error\n";
+        std::cerr << "[STORAGE] Staging cleanup failed: unknown error\n";
         close_descriptors();
     }
 }
@@ -75,11 +74,14 @@ std::filesystem::path PosixStagedFile::commit() {
     for (int attempt = 0; attempt < 1000; ++attempt) {
         const std::filesystem::path filename = filenames_->next();
         const std::filesystem::path destination = directory_ / filename;
+
         if (rename_no_replace(staging_directory_, output_directory_, filename.filename().string(),
                               destination)) {
             if (::fsync(staging_directory_) < 0 || ::fsync(output_directory_) < 0) {
                 const int error = errno;
+
                 if (::unlinkat(output_directory_, filename.filename().c_str(), 0) == 0) {
+                    
                     if (::fsync(output_directory_) < 0) {
                         const int rollback_sync_error = errno;
                         throw std::system_error(
@@ -87,6 +89,7 @@ std::filesystem::path PosixStagedFile::commit() {
                             "directory fsync failed after rollback; file may reappear after a crash: " +
                                 destination.string());
                     }
+                
                 } else {
                     const int rollback_error = errno;
                     throw std::system_error(
@@ -101,11 +104,11 @@ std::filesystem::path PosixStagedFile::commit() {
             try {
                 discard();
             } catch (const std::exception& error) {
-                std::osyncstream(std::cerr) << "[STORAGE] File published at " << destination
-                                            << "; staging cleanup failed: " << error.what() << '\n';
+                std::cerr << "[STORAGE] File published at " << destination
+                          << "; staging cleanup failed: " << error.what() << '\n';
             } catch (...) {
-                std::osyncstream(std::cerr) << "[STORAGE] File published at " << destination
-                                            << "; staging cleanup failed: unknown error\n";
+                std::cerr << "[STORAGE] File published at " << destination
+                          << "; staging cleanup failed: unknown error\n";
             }
             return destination;
         }
@@ -122,12 +125,14 @@ void PosixStagedFile::discard() {
         ::unlinkat(staging_directory_, staged_filename, 0) < 0 && errno != ENOENT) {
         failure = std::string("could not remove staged payload: ") + std::strerror(errno);
     }
+
     if (descriptor_ >= 0) {
         const int descriptor = std::exchange(descriptor_, -1);
         if (::close(descriptor) < 0 && failure.empty()) {
             failure = std::string("could not close staged payload: ") + std::strerror(errno);
         }
     }
+    
     if (output_directory_ >= 0 && !staging_name_.empty()) {
         if (::unlinkat(output_directory_, staging_name_.c_str(), AT_REMOVEDIR) < 0 && errno != ENOENT) {
             if (!failure.empty()) {
@@ -142,9 +147,11 @@ void PosixStagedFile::discard() {
             failure += std::string("could not persist staging cleanup: ") + std::strerror(errno);
         }
     }
+    
     if (!failure.empty()) {
         throw std::runtime_error(failure);
     }
+    
     close_descriptors();
     staging_name_.clear();
 }
