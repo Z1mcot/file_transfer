@@ -14,8 +14,10 @@ public:
 
     std::size_t read_some(std::span<std::byte> buffer) override;
     std::size_t write_some(std::span<const std::byte> buffer) override;
+
     void cancel() noexcept override;
     [[nodiscard]] int fd() const noexcept override;
+    
     NonBlockingResult recv_nonblocking(std::span<std::byte> buffer) noexcept override;
     NonBlockingResult send_nonblocking(std::span<const std::byte> buffer) noexcept override;
 
